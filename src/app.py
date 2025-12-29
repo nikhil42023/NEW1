@@ -5,19 +5,27 @@ A super simple FastAPI application that allows students to view and sign up
 for extracurricular activities at Mergington High School.
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
+from starlette.middleware.sessions import SessionMiddleware
 import os
+import json
 from pathlib import Path
 
 app = FastAPI(title="Mergington High School API",
               description="API for viewing and signing up for extracurricular activities")
 
+app.add_middleware(SessionMiddleware, secret_key="super-secret-key")
+
 # Mount the static files directory
 current_dir = Path(__file__).parent
 app.mount("/static", StaticFiles(directory=os.path.join(Path(__file__).parent,
           "static")), name="static")
+
+# Load teachers
+with open(os.path.join(current_dir, "teachers.json")) as f:
+    teachers = json.load(f)
 
 # In-memory activity database
 activities = {
@@ -83,14 +91,36 @@ def root():
     return RedirectResponse(url="/static/index.html")
 
 
+@app.get("/admin/status")
+def admin_status(request: Request):
+    return {"logged_in": "admin" in request.session}
+
+
+@app.post("/admin/login")
+def login(username: str, password: str, request: Request):
+    if username in teachers and teachers[username] == password:
+        request.session["admin"] = True
+        return {"message": "Logged in as admin"}
+    raise HTTPException(status_code=401, detail="Invalid credentials")
+
+
+@app.post("/admin/logout")
+def logout(request: Request):
+    request.session.pop("admin", None)
+    return {"message": "Logged out"}
+
+
 @app.get("/activities")
 def get_activities():
     return activities
 
 
 @app.post("/activities/{activity_name}/signup")
-def signup_for_activity(activity_name: str, email: str):
+def signup_for_activity(activity_name: str, email: str, request: Request):
     """Sign up a student for an activity"""
+    if "admin" not in request.session:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
     # Validate activity exists
     if activity_name not in activities:
         raise HTTPException(status_code=404, detail="Activity not found")
@@ -111,8 +141,11 @@ def signup_for_activity(activity_name: str, email: str):
 
 
 @app.delete("/activities/{activity_name}/unregister")
-def unregister_from_activity(activity_name: str, email: str):
+def unregister_from_activity(activity_name: str, email: str, request: Request):
     """Unregister a student from an activity"""
+    if "admin" not in request.session:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
     # Validate activity exists
     if activity_name not in activities:
         raise HTTPException(status_code=404, detail="Activity not found")
